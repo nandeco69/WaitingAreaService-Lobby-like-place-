@@ -1,0 +1,244 @@
+local Players = game:GetService("Players")
+local WorkSpace = game:GetService("Workspace")
+local RS = game:GetService("RunService")
+local ReS = game:GetService("ReplicatedStorage")
+
+local Remotes = ReS:WaitForChild("Remotes")
+local WaitingRemote = Remotes:WaitForChild("WaitingArea")
+local LeaveRemote = Remotes:WaitForChild("Leave")
+
+local Local = {}
+local Shared = {}
+
+local MAX_PLAYERS = 4
+local CHECK_INTERVAL = 0.25
+local COUNTDOWN_TIME = 15
+
+local PlayersInArea = {}
+local WaitingAreas = {}
+local CountdownTimers = {}
+local ActiveCountdowns = {}
+local PlayersOnTimer = {}
+local TeleportingFlags = {}                                                                  ---TeleportingFlags will be seen later in the script (Shared.TeleportsPlayerInArea function), it works as a way to avoid double teleports
+
+function Shared.OnStart()
+	local AccumulatedTime = 0
+	
+	LeaveRemote.OnServerEvent:Connect(function(player: Player, action)                       ---Teleports the player to the SpawnLocation when pressing Leave
+		if action == "Leave" then                                                            ---Also acts as a safety fallback to ensure players can manually exit the waiting area
+			local Char = player.Character
+			if Char then
+				local Root = Char:FindFirstChild("HumanoidRootPart")
+				local Spawn = WorkSpace:FindFirstChild("SpawnLocation")
+				if Root and Spawn then
+					Root.CFrame = Spawn.CFrame + Vector3.new(0, 1, 0)
+					print("Player exited manually: " .. player.Name)
+				end
+			end
+		end
+	end)
+	
+	WaitingRemote.OnServerEvent:Connect(function(player: Player, action, areaname, partysize)
+		if action == "StartCountdown" then
+			if ActiveCountdowns[areaname] then
+				warn("Counting already active for the area: " .. areaname .. ", ignoring new request.")
+				return
+			end
+			print("Starting count for area: " ..  tostring(areaname))
+			Shared.StartCountDown(areaname, partysize)
+		end
+	end)
+	
+	for _, part in WorkSpace.Scene.WaitingAreas:GetChildren() do                             ---Checks properties in the Workspace and recognizes them as WaitingAreas accordingly
+		if part:IsA("BasePart") and part.Name:match("^waitingarea%d*$") then
+			WaitingAreas[part.Name] = part
+			PlayersInArea[part.Name] = {}
+			print("Registered waiting area:" .. part.Name)
+		end
+	end
+	
+	RS.Heartbeat:Connect(function(dt)                                                        ---Updates the area and checks how many players are inside every 0.25 seconds
+		AccumulatedTime += dt
+		if AccumulatedTime >= CHECK_INTERVAL then                                            ---Works as a debounce, Ensures updates are done on a fixed interval to reduce load
+			AccumulatedTime = 0
+			for name, part in pairs(WaitingAreas) do
+				Shared.UpdateArea(name, part)
+			end
+			Shared.UpdateCountDowns()
+		end
+	end)
+end
+
+function Shared.UpdateCountDowns()
+	for areaname, timeleft in pairs(CountdownTimers) do                                      ---Loops through all WaitingAreas with active countdowns
+		if timeleft > 0 then                                                                 ---Reduces the countdown timer if it's greater than 0
+			CountdownTimers[areaname] -= CHECK_INTERVAL                                      ---Subtracts the time
+			Shared.UpdateBillBoard(areaname)                                                 ---Updates the visual part of the countdown
+		else                                                                                 ---When the timer ends, the GUI returns to the "WaitingForPlayers" state
+			print("Countdown completed in the area: " .. areaname)
+			Shared.TeleportPlayerInArea(areaname)
+			ActiveCountdowns[areaname] = nil
+			CountdownTimers[areaname] = nil
+			PlayersOnTimer[areaname] = nil
+			Shared.UpdateBillBoard(areaname)
+		end
+	end
+end
+
+function Shared.StartCountDown(areaname: string, partysize: number)
+	for _, player in ipairs(PlayersInArea[areaname]) do
+		WaitingRemote:FireClient(player, "LeaveButton")
+	end
+	if ActiveCountdowns[areaname] then return end
+	
+	ActiveCountdowns[areaname] = true                                                        ---Marks the WaitingArea as having an active countdown
+	CountdownTimers[areaname] = COUNTDOWN_TIME                                               ---Sets the timer
+	PlayersOnTimer[areaname] = partysize                                                     ---Stores the PartySize chosen by the player
+end
+
+function Shared.UpdateBillBoard(areaname: string)
+	local Area = workspace.Scene.WaitingAreas:FindFirstChild(areaname)
+	if not Area then return end
+	
+	local Anchor = Area:FindFirstChild("Anchor")
+	if not Anchor then return end
+	
+	local BillBoard = Anchor:WaitForChild("WaitingBillBoard")
+	if not BillBoard then return end
+	
+	local Label = BillBoard:FindFirstChild("WaitingLabel")
+	if not Label then return end
+	
+	local CurrentPlayers = PlayersInArea[areaname] or {}
+	local MaxPlayers = PlayersOnTimer[areaname] or MAX_PLAYERS
+	local DisplayText = ""
+	
+	if CountdownTimers[areaname] then                                                        ---Defines what will be visually shown, depending on whether the countdown is active or not
+		local time = math.ceil(CountdownTimers[areaname])
+		DisplayText = string.format("Starting in... %d\n%d/%d", time, #CurrentPlayers, MaxPlayers)
+	else
+		DisplayText = string.format("Waiting for  players... \n%d/%d", #CurrentPlayers, MaxPlayers)
+	end
+	
+	Label.Text = DisplayText
+end
+
+function Shared.UpdateArea(areaname: string, part: BasePart)
+	local FoundPlayers = {}
+	
+	for _, player in ipairs(Players:GetPlayers()) do                                           ---Player area that can be checked
+		local Char = player.Character 
+		if Char then                                                                           ---Iterates through all players to determine who is inside the specific waiting area
+			local Root = Char:FindFirstChild("HumanoidRootPart")
+			if Root and Root:IsDescendantOf(WorkSpace) then
+				local Relative = part.CFrame:PointToObjectSpace(Root.Position)
+				local HalfSize = part.Size * 0.5
+				if math.abs(Relative.X) <= HalfSize.X and
+					math.abs(Relative.Y) <= HalfSize.Y and
+					math.abs(Relative.Z) <= HalfSize.Z then
+					table.insert(FoundPlayers, player)
+				end
+			end
+		end
+	end
+	
+	local CurrentPlayers = PlayersInArea[areaname] or {}                                       
+	for i = #CurrentPlayers, 1, -1 do                                                          ---Ensures list accuracy by removing players who left the area
+		local Player = CurrentPlayers[i]
+		if not table.find(FoundPlayers, Player) then
+			table.remove(CurrentPlayers, i)
+			print("Player left the area:" .. Player.Name)
+		end
+	end
+	
+	local WasEmpty = #CurrentPlayers == 0
+	
+	for _, player in ipairs(FoundPlayers) do
+		if not table.find(CurrentPlayers, player) and not Shared.IsAreaFull(areaname) then       ---Adds the player to the table, up to the limit of 4
+			for _, Existing in ipairs(CurrentPlayers) do                                         ---Checks if the Player is already on the WaitingArea
+				if Existing == player then
+					warn("Player " .. player.Name .. " already listed in the area: " .. areaname)
+				end
+			end
+			table.insert(CurrentPlayers, player)
+			print("Player entered the area:" .. player.Name)
+			if ActiveCountdowns[areaname] then                                                 ---Makes the LeaveButton appear to players entering the area, even after the Host creates the Party
+				WaitingRemote:FireClient(player, "LeaveButton")
+			end
+		end
+	end
+	
+	if WasEmpty and #CurrentPlayers >= 1 then                                                  ---Detects if the player who just entered is the first one in the area
+		local FirstPlayer = CurrentPlayers[1]
+		if FirstPlayer then
+			WaitingRemote:FireClient(FirstPlayer, "ShowUI", areaname)
+		end
+	end
+	
+	PlayersInArea[areaname] = CurrentPlayers
+	Shared.UpdateBillBoard(areaname)                                                           ---Updates the Billboard accordingly
+	Shared.DebugAreaStatus(areaname)
+end
+
+function Shared.TeleportPlayerInArea(areaname: string)
+	if TeleportingFlags[areaname] then
+		warn("Area " .. areaname .. " is already in the process of teleportation")
+		return
+	end
+	
+	TeleportingFlags[areaname] = true
+	
+	local TeleportPointsFolder = WorkSpace.Scene:FindFirstChild("TeleportPoints")
+	if not TeleportPointsFolder then
+		warn("Folder not found")
+		TeleportingFlags[areaname] = nil
+		return
+	end
+	
+	local Destination = TeleportPointsFolder:FindFirstChild(areaname)                          ---Destination based on Parts inside a folder
+	if not Destination then
+		warn("DestinationPoint " .. areaname .. " not found")
+		TeleportingFlags[areaname] = nil
+		return
+	end
+	
+	local Players = PlayersInArea[areaname]
+	if not Players then
+		TeleportingFlags[areaname] = nil
+		return
+	end
+	
+	for _, Player in ipairs(Players) do                                                        ---Teleports players from the list
+		local Char = Player.Character
+		if Char then
+			local Root = Char:FindFirstChild("HumanoidRootPart")
+			if Root then
+				Root.CFrame = Destination.CFrame + Vector3.new(0, 1, 0)                        ---Ensures proper spawn positioning to avoid terrain clipping
+				print("Teleported player " .. Player.Name .. " to " .. areaname)
+				WaitingRemote:FireClient(Player, "ForceHideLeave")
+			end
+		end
+	end
+	
+	PlayersInArea[areaname] = {}                                                               ---Clears the player list of the area
+	TeleportingFlags[areaname] = nil
+end
+
+function Shared.IsAreaFull(areaname)                                                           ---Checks if the WaitingArea is full, teleporting just the first Players who entered the area
+	local Players = PlayersInArea[areaname] or {}
+	return #Players >= (PlayersOnTimer[areaname] or MAX_PLAYERS)
+end
+
+local LastDebugTime = {}
+function Shared.DebugAreaStatus(areaname)                                                      ---Checks every 5 seconds how many Players are in the WaitingAreas
+	local Now = tick()
+	local Last = LastDebugTime[areaname] or 0
+	
+	if Now - Last >= 5 then
+		LastDebugTime[areaname] = Now
+		local Players = PlayersInArea[areaname] or {}
+		print("Area [" .. areaname .. "] has " .. #Players .. " players.")
+	end
+end
+
+return Shared

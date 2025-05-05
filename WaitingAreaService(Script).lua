@@ -671,7 +671,7 @@ function Shared.PlayCountdownEffect(areaname: string)
 	local Light = Instance.new("PointLight")
 	Light.Color = Color3.new(1, 1, 1)
 	Light.Brightness = 0.5
-	Light.Range = 1
+	Light.Range = 0.2
 	Light.Parent = Orb
 	
 	--[[
@@ -696,7 +696,7 @@ function Shared.PlayCountdownEffect(areaname: string)
 		Size = Area.Size
 	})
 	local LightUpTween = TS:Create(Light, InitialTweenInfo, {
-		Brightness = 5,
+		Brightness = 1,
 		Range = Area.Size.Magnitude * 1.5
 	})
 	GrowTween:Play()

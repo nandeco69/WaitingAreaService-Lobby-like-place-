@@ -1,3 +1,5 @@
+--------------README-----------------
+
 Script (WaitingArea)
 Script for the WaitingAreas seen in the lobby.
 

@@ -22,7 +22,7 @@ Furthermore, I was suggested to use more varied APIs in the script, and that's w
 
 2- I was told that my notes were not complete and descriptive enough, not only to say what the script does but to try to explain how it works, and that's what I tried to do, adding severe notes throughout the script, in places that I considered to be "key places".
 
-Completing the update, I say that I know that the script is huge, and I probably could have divided a good part of it into smaller scripts, since no application rule is explicitly against this, but to simplify, I decided to leave everything in a single script (even though this may not be good for optimization).
+Completing the update, I say that I know that the script is huge, and I probably could have divided a good part of it into smaller scripts, since no application rule is explicitly against this, but to be sure, I decided to leave everything in a single script (even though this may not be good for optimization).
 
 I hope that with the changes, the script is qualified enough.
 
